@@ -10,95 +10,62 @@ import UIKit
 import QuartzCore
 import SceneKit
 
+enum ColliderType: Int {
+    case Ball = 0b1
+    case Barrier = 0b10
+    case Brick = 0b100
+    case Paddle = 0b1000
+}
+
 class GameViewController: UIViewController {
+    
+    var scnView: SCNView!
+    var game = GameHelper.sharedInstance
+    var scnScene: SCNScene!
+    var horizontalCameraNode: SCNNode!
+    var verticalCameraNode: SCNNode!
+    var ballNode: SCNNode!
+    var paddleNode: SCNNode!
+    var lastContactNode: SCNNode!
+    var touchX: CGFloat = 0
+    var paddleX: Float = 0
+    var floorNode: SCNNode!
 
     override func viewDidLoad() {
         super.viewDidLoad()
         
-        // create a new scene
-        let scene = SCNScene(named: "art.scnassets/ship.scn")!
-        
-        // create and add a camera to the scene
-        let cameraNode = SCNNode()
-        cameraNode.camera = SCNCamera()
-        scene.rootNode.addChildNode(cameraNode)
-        
-        // place the camera
-        cameraNode.position = SCNVector3(x: 0, y: 0, z: 15)
-        
-        // create and add a light to the scene
-        let lightNode = SCNNode()
-        lightNode.light = SCNLight()
-        lightNode.light!.type = SCNLightTypeOmni
-        lightNode.position = SCNVector3(x: 0, y: 10, z: 10)
-        scene.rootNode.addChildNode(lightNode)
-        
-        // create and add an ambient light to the scene
-        let ambientLightNode = SCNNode()
-        ambientLightNode.light = SCNLight()
-        ambientLightNode.light!.type = SCNLightTypeAmbient
-        ambientLightNode.light!.color = UIColor.darkGrayColor()
-        scene.rootNode.addChildNode(ambientLightNode)
-        
-        // retrieve the ship node
-        let ship = scene.rootNode.childNodeWithName("ship", recursively: true)!
-        
-        // animate the 3d object
-        ship.runAction(SCNAction.repeatActionForever(SCNAction.rotateByX(0, y: 2, z: 0, duration: 1)))
-        
-        // retrieve the SCNView
-        let scnView = self.view as! SCNView
-        
-        // set the scene to the view
-        scnView.scene = scene
-        
-        // allows the user to manipulate the camera
-        scnView.allowsCameraControl = true
-        
-        // show statistics such as fps and timing information
-        scnView.showsStatistics = true
-        
-        // configure the view
-        scnView.backgroundColor = UIColor.blackColor()
-        
-        // add a tap gesture recognizer
-        let tapGesture = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
-        scnView.addGestureRecognizer(tapGesture)
+        setupScene()
+        setupNodes()
+        setupSounds()
     }
     
-    func handleTap(gestureRecognize: UIGestureRecognizer) {
-        // retrieve the SCNView
-        let scnView = self.view as! SCNView
-        
-        // check what nodes are tapped
-        let p = gestureRecognize.locationInView(scnView)
-        let hitResults = scnView.hitTest(p, options: nil)
-        // check that we clicked on at least one object
-        if hitResults.count > 0 {
-            // retrieved the first clicked object
-            let result: AnyObject! = hitResults[0]
-            
-            // get its material
-            let material = result.node!.geometry!.firstMaterial!
-            
-            // highlight it
-            SCNTransaction.begin()
-            SCNTransaction.setAnimationDuration(0.5)
-            
-            // on completion - unhighlight
-            SCNTransaction.setCompletionBlock {
-                SCNTransaction.begin()
-                SCNTransaction.setAnimationDuration(0.5)
-                
-                material.emission.contents = UIColor.blackColor()
-                
-                SCNTransaction.commit()
-            }
-            
-            material.emission.contents = UIColor.redColor()
-            
-            SCNTransaction.commit()
-        }
+    func setupScene() {
+        scnView = self.view as! SCNView
+        scnView.delegate = self
+        scnScene = SCNScene(named: "Breaker.scnassets/Scenes/Game.scn")
+        scnView.scene = scnScene
+        scnScene.physicsWorld.contactDelegate = self
+    }
+    
+    func setupNodes() {
+        scnScene.rootNode.addChildNode(game.hudNode)
+        horizontalCameraNode = scnScene.rootNode.childNodeWithName("HorizontalCamera", recursively: true)!
+        verticalCameraNode = scnScene.rootNode.childNodeWithName("VerticalCamera", recursively: true)!
+        ballNode = scnScene.rootNode.childNodeWithName("Ball", recursively: true)!
+        paddleNode = scnScene.rootNode.childNodeWithName("Paddle", recursively: true)!
+        ballNode.physicsBody?.contactTestBitMask = ColliderType.Barrier.rawValue | ColliderType.Brick.rawValue | ColliderType.Paddle.rawValue
+        floorNode = scnScene.rootNode.childNodeWithName("Floor", recursively: true)!
+        verticalCameraNode.constraints = [SCNLookAtConstraint(target: floorNode)]
+        horizontalCameraNode.constraints = [SCNLookAtConstraint(target: floorNode)]
+    }
+    
+    func setupSounds() {
+        game.loadSound("Paddle", fileNamed: "Breaker.scnassets/Sounds/Paddle.wav")
+        game.loadSound("Block0", fileNamed: "Breaker.scnassets/Sounds/Block0.wav")
+        game.loadSound("Block1", fileNamed: "Breaker.scnassets/Sounds/Block1.wav")
+        game.loadSound("Block2", fileNamed: "Breaker.scnassets/Sounds/Block2.wav")
+        game.loadSound("Barrier", fileNamed: "Breaker.scnassets/Sounds/Barrier.wav")
+        game.loadSound("Over", fileNamed: "Breaker.scnassets/Sounds/GameOver.wav")
     }
     
     override func shouldAutorotate() -> Bool {
@@ -109,17 +76,91 @@ class GameViewController: UIViewController {
         return true
     }
     
-    override func supportedInterfaceOrientations() -> UIInterfaceOrientationMask {
-        if UIDevice.currentDevice().userInterfaceIdiom == .Phone {
-            return .AllButUpsideDown
-        } else {
-            return .All
+    override func viewWillTransitionToSize(size: CGSize, withTransitionCoordinator coordinator: UIViewControllerTransitionCoordinator) {
+        let deviceOrientation = UIDevice.currentDevice().orientation
+        switch (deviceOrientation) {
+        case .Portrait:
+            scnView.pointOfView = verticalCameraNode
+        default:
+            scnView.pointOfView = horizontalCameraNode
         }
     }
     
-    override func didReceiveMemoryWarning() {
-        super.didReceiveMemoryWarning()
-        // Release any cached data, images, etc that aren't in use.
+    override func touchesBegan(touches: Set<UITouch>, withEvent event: UIEvent?) {
+        for touch in touches {
+            let location = touch.locationInView(scnView)
+            touchX = location.x
+            paddleX = paddleNode.position.x
+        }
     }
+    
+    override func touchesMoved(touches: Set<UITouch>, withEvent event: UIEvent?) {
+        for touch in touches {
+            let location = touch.locationInView(scnView)
+            paddleNode.position.x = paddleX + (Float(location.x - touchX) * 0.1)
+            
+            if paddleNode.position.x > 4.5 {
+                paddleNode.position.x = 4.5
+            } else if paddleNode.position.x < -4.5 {
+                paddleNode.position.x = -4.5
+            }
+        }
+        verticalCameraNode.position.x = paddleNode.position.x
+        horizontalCameraNode.position.x = paddleNode.position.x
+    }
+}
 
+extension GameViewController: SCNSceneRendererDelegate {
+    func renderer(renderer: SCNSceneRenderer, updateAtTime time: NSTimeInterval) {
+        game.updateHUD()
+    }
+}
+
+extension GameViewController: SCNPhysicsContactDelegate {
+    func physicsWorld(world: SCNPhysicsWorld, didBeginContact contact: SCNPhysicsContact) {
+        var contactNode: SCNNode!
+        if contact.nodeA.name == "Ball" {
+            contactNode = contact.nodeB
+        } else {
+            contactNode = contact.nodeA
+        }
+        if lastContactNode != nil && lastContactNode == contactNode {
+            return
+        }
+        lastContactNode = contactNode
+        
+        if contactNode.physicsBody?.categoryBitMask == ColliderType.Barrier.rawValue {
+            game.playSound(scnScene.rootNode, name: "Barrier")
+            if contactNode.name == "Bottom" {
+                game.lives -= 1
+                if game.lives == 0 {
+                    game.playSound(scnScene.rootNode, name: "Over")
+                    game.saveState()
+                    game.reset()
+                }
+            }
+        }
+        
+        if contactNode.physicsBody?.categoryBitMask == ColliderType.Brick.rawValue {
+            game.playSound(scnScene.rootNode, name: "Block0")
+            game.score += 1
+            contactNode.hidden = true
+            contactNode.runAction(SCNAction.waitForDurationThenRunBlock(120) {
+                (node: SCNNode!) -> Void in
+                node.hidden = false
+            })
+        }
+        
+        if contactNode.physicsBody?.categoryBitMask == ColliderType.Paddle.rawValue {
+            game.playSound(scnScene.rootNode, name: "Paddle")
+            if contactNode.name == "Left" {
+                ballNode.physicsBody!.velocity.xzAngle -= (convertToRadians(20))
+            }
+            if contactNode.name == "Right" {
+                ballNode.physicsBody!.velocity.xzAngle += (convertToRadians(20))
+            }
+        }
+        
+        ballNode.physicsBody?.velocity.length = 3.0
+    }
 }
